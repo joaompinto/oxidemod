@@ -1,3 +1,6 @@
+
+ // Require: HumanNPC
+
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -60,7 +63,7 @@ namespace Oxide.Plugins
         //////////////////////////////////////////////////////
         void OnServerInitialized()
         {
-            eyesPosition = new Vector3(1f, 1f, 0f);
+            eyesPosition = new Vector3(10f, 10f, 0f);
             Vector3Down = new Vector3(0f, -1f, 0f);
         }
 
@@ -68,7 +71,7 @@ namespace Oxide.Plugins
         {            
             Quaternion currentRot;
             Puts("On respawn");
-
+            player.ChatMessage( "Respawn!" );
             if (!TryGetPlayerView(player, out currentRot))
             {
                 Puts($"Did not get player view"+  player.transform.position);
