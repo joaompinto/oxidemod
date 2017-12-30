@@ -1,24 +1,42 @@
-/* // Requires: GUIAnnouncements */
+/*
+Copyright 2017, João Pinto <lamego.pinto@gmail.com>
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+/* 
+    Plugin logic:
+    a) Spawn a large wooden box at a random location
+    b) Create an AK using a workshop skin id (golden alike) and place it on the container
+    c) Track the AK position and mark it on the map, so that other players seek to capture it
+*/
+
+// Requires: GUIAnnouncements
 
 using System;
-using System.IO;    /* Needed for Path */
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Facepunch;
-using Newtonsoft.Json;
 using Oxide.Core;
 using Oxide.Core.Configuration;
 using Oxide.Core.Plugins;
-using Oxide.Game.Rust.Cui;
 using Rust;
 using UnityEngine;
 
-// Quaternion.LookRotation((lastDeathPosition - player.eyes.position).normalized).eulerAngles.y
 
 namespace Oxide.Plugins
 {
-    [Info("GoldenAKChallenge", "Lamego", "0.0.1")]
+    [Info("GoldenAKChallenge", "Lamego", "0.0.2")]
 
     class GoldenAKChallenge : RustPlugin
     {
@@ -26,24 +44,18 @@ namespace Oxide.Plugins
         [PluginReference]
         private Plugin GUIAnnouncements;
 
-		bool initialized = false;
-
         const int AK_ITEM_ID = -1461508848;
         const ulong GOLDEN_AK_SKIN_ID = 1167207039;
 
-        static GoldenAKChallenge instance;
+        private static GoldenAKChallenge plugin;
 
         #region AK tracking
-        private BasePlayer holdingPlayer = null;        
-        private DroppedItem dropAK = null;
-        private Item holdAK = null;
+        private BasePlayer holdingPlayer = null;    
+        private DroppedItem droppedAK = null;    /* We need to keep this to destroy the tracker  */
+        private Item goldenAK = null;
         private StorageContainer containerAK = null;
         private ulong currentOwnerID = 0;   /* UID of the last user holding the AK */
-        #endregion
-
-        #region Map marker update
-        private Timer _timer;
-        private MapMarkerGenericRadius mapMarker = null;
+        private static MapMarkerGenericRadius mapMarker = null;
         #endregion
 
         #region Game Data
@@ -58,7 +70,32 @@ namespace Oxide.Plugins
         StoredData gameData;
         #endregion
 
-        Vector3 lastMarkerPos = Vector3.zero;            
+        Vector3 lastMarkerPos = Vector3.zero;   
+        private Timer _timer;
+
+        private class Tracker : MonoBehaviour
+        {
+            Transform targetTansform;
+            float lastX = 0;
+            float lastZ = 0;
+
+            private void Awake()
+            {
+                targetTansform = gameObject.transform;
+            }
+
+            private void Update()
+            {
+                float currentX = targetTansform.position.x;
+                float currentZ = targetTansform.position.z;
+                if(targetTansform.hasChanged && ((currentX != lastX) || (currentZ != lastZ)))
+                {
+                    plugin.SetMapMarker(targetTansform.position);
+                    lastX = currentX;
+                    lastZ = currentZ;
+                }
+            }
+        }   
 
         StorageContainer CreateLargeBox(Vector3 position)
         {
@@ -72,7 +109,7 @@ namespace Oxide.Plugins
 
         public Vector3 GetEventPosition()
         {
-            int maxRetries = 100;
+            int maxRetries = 500;
             Vector3 localeventPos;
 
             int blockedMask = LayerMask.GetMask(new[] { "Player (Server)", "Trigger", "Prevent Building" });
@@ -149,85 +186,46 @@ namespace Oxide.Plugins
         }
 
 
-        /// <summary>
-        /// Finds player by SteamID
-        /// </summary>
-        /// <param name="steamid">SteamID of the player to be searched</param>
-        /// <returns></returns>
-        BasePlayer FindPlayerByID(ulong steamid)
-        {
-            BasePlayer targetplayer = BasePlayer.FindByID(steamid);
-            if (targetplayer != null)
-            {
-                return targetplayer;
-            }
-            targetplayer = BasePlayer.FindSleeping(steamid);
-            if (targetplayer != null)
-            {
-                return targetplayer;
-            }
-            return null;
-        }
-
 
         public Vector3 GAKChestEvent(BasePlayer player = null) {
             Vector3 eventPos;
             var randomPos = GetEventPosition();                        
             if (randomPos == Vector3.zero)
             {
+                PrintError("Unable to spaw randomPos");
                 return Vector3.zero;
             }
 
             eventPos = randomPos;
-            Puts("Spawned Golden AK box at "+eventPos.ToString());
+            plugin.Puts("Spawned Golden AK box at "+eventPos.ToString());
 
-            StorageContainer container = CreateLargeBox(eventPos);
+            StorageContainer container = CreateLargeBox(eventPos);        
             if (!container)
             {
                 PrintError("Unable to spaw container");
                 return Vector3.zero;
             }
-            UpdateMarker(eventPos);
 
-            holdAK = ItemManager.CreateByItemID(AK_ITEM_ID, 1);     
-            var weapon = holdAK.GetHeldEntity() as BaseProjectile;                   
+            goldenAK = ItemManager.CreateByItemID(AK_ITEM_ID, 1);     
+            var weapon = goldenAK.GetHeldEntity() as BaseProjectile;                   
             ulong skin_id = 0;
             skin_id = GOLDEN_AK_SKIN_ID;
-            holdAK.skin = skin_id;                
-            if (holdAK.GetHeldEntity() != null) 
+            goldenAK.skin = skin_id;                
+            if (goldenAK.GetHeldEntity() != null) 
             { 
-                holdAK.GetHeldEntity().skinID  = skin_id;
+                goldenAK.GetHeldEntity().skinID  = skin_id;
             }
             container.inventory.Clear();
             weapon.primaryMagazine.contents = weapon.primaryMagazine.capacity;
-            holdAK.dirty = true;
             weapon.SendNetworkUpdateImmediate();            
-            holdAK.MoveToContainer(container.inventory, -1, true);                        
+            goldenAK.MoveToContainer(container.inventory, -1, true);                        
             container.inventory.MarkDirty();      
             containerAK = container;
+            containerAK.gameObject.AddComponent<Tracker>();
             return container.transform.position;
         }
 
-        void MapMarkerRefresh()
-        {       
-            Vector3 trackedPos = Vector3.zero;
-            if(holdingPlayer != null)
-                trackedPos = holdingPlayer.transform.position;
-            else if(dropAK != null)
-                trackedPos = dropAK.transform.position;
-            else if(containerAK != null)
-            {
-                trackedPos = containerAK.transform.position;
-            }
-            if(lastMarkerPos != trackedPos)
-            {
-                UpdateMarker(trackedPos);
-                lastMarkerPos = trackedPos;
-            }
-        }      
-
-
-		void Init()
+    	void Init()
         {   
             LoadData();			
         }
@@ -240,33 +238,34 @@ namespace Oxide.Plugins
         object OnItemPickup(Item item, BasePlayer player)        
         {
 
-            if(item != dropAK.GetItem())   /* We only care about our ak */
+            if(item != goldenAK)   /* We only care about our ak */
                 return null;
 
+            DestroyAnyTracker();
             holdingPlayer = player;
-            holdAK = item;
-            dropAK = null;            
             containerAK = null;
+            holdingPlayer.gameObject.AddComponent<Tracker>();            
 
             if(player.userID != currentOwnerID)                      
             {
                 currentOwnerID = player.userID;    
-                string msg = String.Format("The Golden AK was picked by {0}", player.displayName);
+                string msg = Lang("NotAllowedPerm", player.displayName);
                 GUIAnnouncements?.Call("CreateAnnouncement", msg, "gray", "white", player);
-            }
-            
+            }            
             
             return null;
         }
 
         void OnItemDropped(Item item, BaseEntity entity)
         {
-            if(item != holdAK)   /* We only care about our ak */
-                return;
-            holdingPlayer = null;
-            holdAK = null;
-            dropAK = FindOnDroppedItems(item.uid);
 
+            if(item == goldenAK)
+            {
+                DestroyAnyTracker();                
+                holdingPlayer = null;
+                droppedAK = FindOnDroppedItems(item.uid);
+                droppedAK.gameObject.AddComponent<Tracker>();
+            }
         }
         
 
@@ -274,15 +273,15 @@ namespace Oxide.Plugins
         {
             foreach (Item i in player.inventory.FindItemIDs(AK_ITEM_ID))
             {
-                if(i == holdAK)
-                {                    
-                    Puts("Got my AK");
+                if(i == goldenAK)
+                {               
+                    DestroyAnyTracker();                    
+                    holdingPlayer = player;           
+                    holdingPlayer.gameObject.AddComponent<Tracker>();   
                     containerAK = null;
-                    dropAK = null;
-                    holdingPlayer = player;
                     if(player.userID != currentOwnerID) { /* Owner change */
                         currentOwnerID = player.userID;                    
-                        string msg = String.Format("The Golden AK was picked by {0}", player.displayName);
+                        string msg = Lang("Picked", player.UserIDString, player.displayName);
                         GUIAnnouncements?.Call("CreateAnnouncement", msg, "gray", "white", player);
                     }
                     return;                    
@@ -293,8 +292,10 @@ namespace Oxide.Plugins
             if (player == holdingPlayer)
             {
                 if(entity is StorageContainer)
-                {
+                {                    
+                    DestroyAnyTracker();                    
                     containerAK = entity as StorageContainer;
+                    containerAK.gameObject.AddComponent<Tracker>();
                     holdingPlayer = null;
                 }
             }
@@ -304,7 +305,7 @@ namespace Oxide.Plugins
         // Don't allow AK to be placed on destrutible containers
         object CanAcceptItem(ItemContainer container, Item item)
         {
-            if(item == holdAK)
+            if(item == goldenAK)
             {
                 var entityOwner = container.entityOwner;
                 if(entityOwner is Recycler || entityOwner is ResearchTable || entityOwner is LootContainer )
@@ -326,38 +327,41 @@ namespace Oxide.Plugins
             return null;
         }
 
+
+        void OnEntityDeath(BaseCombatEntity victim, HitInfo info)        
+        {
+            if(holdingPlayer == null)
+                return;
+
+            var corpse = victim as BaseCorpse;
+            var player = victim.ToPlayer();
+            
+            if (player == holdingPlayer)
+            {
+                DestroyAnyTracker();
+                SetMapMarker(player.transform.position);
+                holdingPlayer = null;
+            }  
+        }
+
         void OnServerInitialized()
         {
 
-            
-
-			if (initialized)
-				return;
-
-            // Seen this code on other plugin but I am not sure if it's needed
-            // The plugin is waiting for the itemList to be populated
-			var itemList = ItemManager.itemList;
-			if (itemList == null || itemList.Count == 0)
-			{                
-				NextTick(OnServerInitialized);
-				return;
-			}
-
-            instance = this;
-
+            plugin = this;       
             UpdateTrackingObjects();
 
-
-            //DownloadImages();
-
-            if(holdAK == null && dropAK == null)
+            if(goldenAK == null)
             {
+                // Started a new game
                 GAKChestEvent();
             } else
-                Puts("Restored game from data");
-            
-            _timer = timer.Every(1, MapMarkerRefresh);            
-            
+                Puts("Resumed game from data");
+            _timer = timer.Every(1, MapMarkerRefresh);
+        }
+
+        private void MapMarkerRefresh()
+        {
+            UpdateMarker(lastMarkerPos);
         }
 
         private void UpdateTrackingObjects()
@@ -366,45 +370,53 @@ namespace Oxide.Plugins
             if(gameData.AK_ID == 0)
                 return;
 
-            // Search the AK on players inventory
+            DestroyAnyTracker();
+
+            // Search the AK on actives players inventory
             foreach(BasePlayer player in BasePlayer.activePlayerList)
             {
                 foreach (Item i in player.inventory.FindItemIDs(AK_ITEM_ID))
                 {
                     if(i.uid == gameData.AK_ID)
                     {
+                        Puts("Found player holding AK ");
+                        holdingPlayer = player;                        
+                        holdingPlayer.gameObject.AddComponent<Tracker>();
                         currentOwnerID = player.userID;
-                        holdingPlayer = player;
-                        holdAK = i;
-                        dropAK = null;
+                        goldenAK = i;
                         containerAK = null;
+                        droppedAK = null;
                         return;
                     }
                 }
             }
 
-            // Search the AK on players inventory
+            // Search the AK on sleeping players inventory
             foreach(BasePlayer player in BasePlayer.sleepingPlayerList)
             {
                 foreach (Item i in player.inventory.FindItemIDs(AK_ITEM_ID))
                 {
                     if(i.uid == gameData.AK_ID)
                     {
+                        Puts("Found sleeping player holding AK");                        
+                        holdingPlayer = player;                        
+                        holdingPlayer.gameObject.AddComponent<Tracker>();
                         currentOwnerID = player.userID;
-                        holdingPlayer = player;
-                        holdAK = i;
-                        dropAK = null;
+                        goldenAK = i;
                         containerAK = null;
+                        droppedAK = null;
                         return;
                     }
                 }
             }
 
             // Search the AK on dropped items
-            dropAK = FindOnDroppedItems(gameData.AK_ID);
-            if(dropAK != null)
+            droppedAK = FindOnDroppedItems(gameData.AK_ID);
+            if(droppedAK != null)
             {
-                holdAK = null;                
+                Puts("Found AK on droppedItem");
+                droppedAK.gameObject.AddComponent<Tracker>();
+                goldenAK = droppedAK.GetItem();          
                 holdingPlayer = null;
                 containerAK = null;
                 return;
@@ -417,17 +429,27 @@ namespace Oxide.Plugins
                 {
                     if(i.uid == gameData.AK_ID)
                     {
-                        Puts("Found on container");
+                        Puts("Found AK on container");
+                        containerAK = container;                        
+                        containerAK.gameObject.AddComponent<Tracker>();
                         currentOwnerID = gameData.currentOwnerID;
                         holdingPlayer = null;
-                        holdAK = i;
-                        dropAK = null;
-                        containerAK = container;
+                        goldenAK = i;
+                        return;
                     }
                 }
             }
-        }
+        }    
 
+        private new void LoadMessages()
+        {
+            // English
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                ["Picked"] = "The Golden AK was picked by {0}",
+            }, this);
+        }
+       
         private void LoadData()
         {
 
@@ -439,7 +461,7 @@ namespace Oxide.Plugins
             {
                 if(ex is MissingMethodException)
                 {
-                    instance.Puts("No data was found.");
+                    plugin.Puts("No data was found.");
                     gameData = new StoredData();
                     return;
                 }
@@ -450,8 +472,15 @@ namespace Oxide.Plugins
         private void SaveData()
         {
             gameData.currentOwnerID = currentOwnerID;            
-            gameData.AK_ID = (holdAK != null) ? holdAK.uid : dropAK.GetItem().uid;
+            gameData.AK_ID = goldenAK.uid;
             Interface.Oxide.DataFileSystem.WriteObject("GoldenAKChallenge", gameData);
+        }
+
+
+    
+        private void SetMapMarker(Vector3 position)
+        {
+            lastMarkerPos = position;
         }
 
         private void UpdateMarker(Vector3 position)
@@ -464,13 +493,29 @@ namespace Oxide.Plugins
             mapMarker.radius = 2;
             mapMarker.Spawn();
             mapMarker.SendUpdate();
+        }       
+
+        void DestroyAnyTracker() 
+        {
+            SetMapMarker(Vector3.zero);
+            Tracker tracker = containerAK?.GetComponent<Tracker>() ?? holdingPlayer?.GetComponent<Tracker>() ?? droppedAK?.GetComponent<Tracker>();
+            if (tracker != null)
+                UnityEngine.Object.Destroy(tracker);
+        }
+
+        void Loaded()
+        {
+            LoadMessages();
         }
 
         void Unload()
         {
-            SaveData();
             mapMarker?.Kill();
+            mapMarker.SendUpdate();
+            DestroyAnyTracker();
+            SaveData();
         }           
+
+        private string Lang(string key, string id = null, params object[] args) => string.Format(lang.GetMessage(key, this, id), args);
     }
-    
 }
