@@ -18,7 +18,7 @@ limitations under the License.
     Plugin logic:
     a) Spawn a large wooden box at a random location
     b) Create an AK using a workshop skin id (golden alike) and place it on the container
-    c) Track the AK position and mark it on the map, so that other players seek to capture it
+    c) Track the AK position and mark it on the map, so that other players attempt to capture it
 */
 
 // Requires: GUIAnnouncements
@@ -197,7 +197,7 @@ namespace Oxide.Plugins
             }
 
             eventPos = randomPos;
-            plugin.Puts("Spawned Golden AK box at "+eventPos.ToString());
+            Puts("Spawned Golden AK box at "+eventPos.ToString());
 
             StorageContainer container = CreateLargeBox(eventPos);        
             if (!container)
@@ -224,16 +224,6 @@ namespace Oxide.Plugins
             containerAK.gameObject.AddComponent<Tracker>();
             return container.transform.position;
         }
-
-    	void Init()
-        {   
-            LoadData();			
-        }
-
-		void OnServerSave()
-		{
-			SaveData();
-		}
 
         object OnItemPickup(Item item, BasePlayer player)        
         {
@@ -441,43 +431,6 @@ namespace Oxide.Plugins
             }
         }    
 
-        private new void LoadMessages()
-        {
-            // English
-            lang.RegisterMessages(new Dictionary<string, string>
-            {
-                ["Picked"] = "The Golden AK was picked by {0}",
-            }, this);
-        }
-       
-        private void LoadData()
-        {
-
-            try
-            {
-                gameData = Interface.Oxide.DataFileSystem.ReadObject<StoredData>("GoldenAKChallenge");
-            }
-            catch (Exception ex)
-            {
-                if(ex is MissingMethodException)
-                {
-                    plugin.Puts("No data was found.");
-                    gameData = new StoredData();
-                    return;
-                }
-                RaiseError($"Failed to load data file. ({ex.Message})\n");
-            }
-        }
-
-        private void SaveData()
-        {
-            gameData.currentOwnerID = currentOwnerID;            
-            gameData.AK_ID = goldenAK.uid;
-            Interface.Oxide.DataFileSystem.WriteObject("GoldenAKChallenge", gameData);
-        }
-
-
-    
         private void SetMapMarker(Vector3 position)
         {
             lastMarkerPos = position;
@@ -503,10 +456,50 @@ namespace Oxide.Plugins
                 UnityEngine.Object.Destroy(tracker);
         }
 
-        void Loaded()
+        private new void LoadDefaultMessages()
         {
-            LoadMessages();
+            // English
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                ["Picked"] = "The Golden AK was picked by {0}",
+            }, this);
         }
+
+        private void SaveData()
+        {
+            gameData.currentOwnerID = currentOwnerID;            
+            gameData.AK_ID = goldenAK.uid;
+            Interface.Oxide.DataFileSystem.WriteObject("GoldenAKChallenge", gameData);
+        }
+       
+        private void LoadData()
+        {
+
+            try
+            {
+                gameData = Interface.Oxide.DataFileSystem.ReadObject<StoredData>("GoldenAKChallenge");
+            }
+            catch (Exception ex)
+            {
+                if(ex is MissingMethodException)
+                {
+                    Puts("No data was found.");
+                    gameData = new StoredData();
+                    return;
+                }
+                RaiseError($"Failed to load data file. ({ex.Message})\n");
+            }
+        }
+
+    	void Init()
+        {   
+            LoadData();			
+        }
+
+		void OnServerSave()
+		{
+			SaveData();
+		}
 
         void Unload()
         {
